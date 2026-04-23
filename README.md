@@ -23,11 +23,15 @@ This benchmark script evaluates:
 
 Install dependencies (first run):
 
+ZSH:
+
 ```zsh
 julia -e 'using Pkg; Pkg.add(["BenchmarkTools", "Metal"])'
 ```
 
 OR
+
+BASH:
 
 ```bash
 julia -e 'using Pkg; Pkg.add(["BenchmarkTools", "Metal"])'
