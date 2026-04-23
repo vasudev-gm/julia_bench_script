@@ -73,4 +73,17 @@ N = 16384
 - Results vary based on thermal conditions and system load
 - Modify the size of N depending on available memory as swap usage decreases overall performance
 
+## Benching Results on Mac Mini M4 Base Model
+
+| Mac mini M4 16GB RAM/256GB SSD                                  |                            |                              |
+|:---------------------------------------------------------------:|:--------------------------:|:----------------------------:|
+|                                                                 | OBS Recording in Bacground | Virtually No Background apps |
+| CPU SC Bandwidth \(in GB/s\)                                    | 80\.376                    | 96\.428                      |
+| CPU MultiCore Bandwidth \(in GB/s\)                             | 96\.597                    | 106\.787                     |
+| GPU Bandwidth \(in GB/s\)                                       | 94\.273                    | 104\.952                     |
+| CPU Compute Throughput \(in GFLOP\)                             | 557\.227                   | 610\.144                     |
+| GPU Compute Throughput FP32 \(in GFLOP\)                        | 1748\.57                   | 3245\.443                    |
+| GPU Compute Throughput FP16 \(in GFLOP\)                        | 2187\.939                  | 3766\.512                    |
+| GPU Compute Throughput FP16/FP32 \(Times Faster than baseline\) | 1\.251                     | 1\.161                       |
+
 [def]: https://www.youtube.com/watch?v=wV7bK8IhUn4
