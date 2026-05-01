@@ -18,6 +18,7 @@ This benchmark script evaluates:
 - `BenchmarkTools.jl`
 - `LinearAlgebra.jl`
 - `Metal.jl` (for Apple Silicon GPU benchmarks)
+- `Plots.jl` (for saving benchmark charts)
 
 ## Usage
 
@@ -26,7 +27,7 @@ Install dependencies (first run):
 ZSH:
 
 ```zsh
-julia -e 'using Pkg; Pkg.add(["BenchmarkTools", "Metal"])'
+julia -e 'using Pkg; Pkg.add(["BenchmarkTools", "Metal", "Plots"])'
 ```
 
 OR
@@ -34,7 +35,7 @@ OR
 BASH:
 
 ```bash
-julia -e 'using Pkg; Pkg.add(["BenchmarkTools", "Metal"])'
+julia -e 'using Pkg; Pkg.add(["BenchmarkTools", "Metal", "Plots"])'
 ```
 
 Then run the benchmark:
@@ -50,6 +51,12 @@ The script reports:
 - **Execution time** (milliseconds), using BenchmarkTools trial mean
 - **Memory bandwidth** (GB/s) for vector and AXPY kernels
 - **Compute performance** (GFLOPS) for matrix multiplication
+- **Saved plots** in `plots/` by default:
+- `vector_add_cpu_ms.png`
+- `axpy_cpu_ms.png`
+- `axpy_gpu_ms.png`
+- `matmul_cpu_ms.png`
+- `matmul_gpu_ms.png`
 
 ## Configuration
 
@@ -63,6 +70,12 @@ Modify the matrix multiplication size separately:
 
 ```julia
 N = 16384
+```
+
+Optional environment overrides:
+
+```bash
+VECTOR_N=67108864 MATMUL_N=4096 MATMUL_SECONDS=30 PLOT_DIR=plots julia apple_soc_test.jl
 ```
 
 ## Notes

@@ -1,79 +1,193 @@
 using BenchmarkTools
 using LinearAlgebra
 using Metal
+using Plots
 
-# Define a large Number of iterations for benchmarking
-N = 2^30
+const DEFAULT_VECTOR_N = 2^26
+const DEFAULT_MATMUL_N = 4096
+const DEFAULT_MATMUL_SECONDS = 30
+const DEFAULT_ALPHA = 1.0f0
+const DEFAULT_PLOT_DIR = "plots"
 
-x = rand(Float32, N)
-y = rand(Float32, N)
+function env_int(name::String, default::Int)
+    parsed = tryparse(Int, get(ENV, name, string(default)))
+    return isnothing(parsed) ? default : parsed
+end
 
-# Benchmark the using vector addition for SC performance and bandwidth
-println("Benchmarking vector addition for Peak Single Core Performance and Memory Bandwidth....")
-time_taken = @benchmark $y .+= $x
+function env_str(name::String, default::String)
+    value = get(ENV, name, default)
+    return isempty(strip(value)) ? default : value
+end
 
-# Use mean time from the benchmark results to calculate the best time in seconds and milliseconds
-best_time_ns = mean(time_taken).time
-best_time_ms = best_time_ns / 1e6
-best_time_s = best_time_ns / 1e9
+function mean_time_stats(trial::BenchmarkTools.Trial)
+    ns = mean(trial).time
+    return (ns=ns, ms=ns / 1e6, s=ns / 1e9)
+end
 
-println("Length of y: ", length(y) * 4 * 3, " bytes") # Each Float32 is 4 bytes, and we have 3 arrays (x, y, and the result)
-println("Best time for vector addition: ", best_time_ms, " ms")
+bandwidth_gbps(elements::Int, seconds::Float64; arrays_touched::Int=3, elbytes::Int=4) =
+    ((elements * elbytes * arrays_touched) / seconds) / 1e9
 
-print("Estimated bandwidth: ", ((length(y) * 4 * 3) / best_time_s) / 1e9, " GigaBytes/s") # Bandwidth = Total data processed / Time taken
+matmul_gflops(n::Int, seconds::Float64) = (2.0 * n^3) / (seconds * 1e9)
 
-# BLAS Kernel benchmark for MC performance and bandwidth by reusing the x and y values
-println("\nBenchmarking BLAS kernel for Peak Multi Core Performance and Memory Bandwidth....")
-a = 1.0f0
-time_taken_blas = @benchmark axpy!(a, $y, $x)
+function axpy_gpu_sync!(alpha::Float32, y_m, x_m)
+    Metal.@sync axpy!(alpha, y_m, x_m)
+    return nothing
+end
 
-# Use mean time from the benchmark results to calculate the best time in seconds and milliseconds
-best_time_ns = mean(time_taken_blas).time
-best_time_ms = best_time_ns / 1e6
-best_time_s = best_time_ns / 1e9
+function matmul_gpu_sync!(C_m, A_m, B_m)
+    Metal.@sync mul!(C_m, A_m, B_m)
+    return nothing
+end
 
-println("Length of y: ", length(y) * 4 * 3, " bytes") # Each Float32 is 4 bytes, and we have 3 arrays (x, y, and the result)
-println("Best time for BLAS kernel: ", best_time_ms, " ms")
+function save_trial_plot(trial::BenchmarkTools.Trial, title::String, out_file::String)
+    times_ms = trial.times ./ 1e6
+    p = histogram(
+        times_ms,
+        bins=:auto,
+        xlabel="Sample Time (ms)",
+        ylabel="Frequency",
+        title=title,
+        legend=false,
+        color=:steelblue,
+    )
+    vline!(p, [mean(times_ms)], color=:red, linewidth=2)
+    savefig(p, out_file)
+end
 
-print("Estimated bandwidth: ", ((length(y) * 4 * 3) / best_time_s) / 1e9, " GigaBytes/s (More is Better)") # Bandwidth = Total data processed / Time taken
+function save_plots(results::NamedTuple, plot_dir::String)
+    mkpath(plot_dir)
 
-# Use Metal backend to test Apple Silicon based GPU for increased parallelism to achieve peak performance and bandwidth by reusing the x and y values declared as new metal arrays
-x_m = MtlArray(x)
-y_m = MtlArray(y)
-println("\nBenchmarking vector addition on Apple Silicon GPU for Peak Performance and Memory Bandwidth....")
-time_taken_gpu = @benchmark Metal.@sync axpy!(a, $y_m, $x_m)
-# Use mean time from the benchmark results to calculate the best time in seconds and milliseconds
-best_time_ns_gpu = mean(time_taken_gpu).time
-best_time_ms_gpu = best_time_ns_gpu / 1e6
-best_time_s_gpu = best_time_ns_gpu / 1e9
-println("Length of y: ", length(y) * 4 * 3, " bytes") # Each Float32 is 4 bytes, and we have 3 arrays (x, y, and the result)
-println("Best time for vector addition on Apple Silicon GPU: ", best_time_ms_gpu, " ms")
-print("Estimated bandwidth on Apple Silicon GPU: ", ((length(y) * 4 * 3) / best_time_s_gpu) / 1e9, " GigaBytes/s (More is Better)") # Bandwidth = Total data processed / Time taken
+    save_trial_plot(results.vec_cpu.trial, "Vector Add CPU Trial Times", joinpath(plot_dir, "vector_add_cpu_ms.png"))
+    save_trial_plot(results.axpy_cpu.trial, "AXPY CPU Trial Times", joinpath(plot_dir, "axpy_cpu_ms.png"))
+    save_trial_plot(results.axpy_gpu.trial, "AXPY GPU Trial Times", joinpath(plot_dir, "axpy_gpu_ms.png"))
+    save_trial_plot(results.mm_cpu.trial, "MatMul CPU Trial Times", joinpath(plot_dir, "matmul_cpu_ms.png"))
+    save_trial_plot(results.mm_gpu.trial, "MatMul GPU Trial Times", joinpath(plot_dir, "matmul_gpu_ms.png"))
+end
 
-# Use Matrix Multiplication to Peak Compute Performance and reduce max Numbers size
-N = 16384
-A = rand(Float32, N, N)
-B = rand(Float32, N, N)
-C = similar(B)
-println("\nBenchmarking matrix multiplication on Apple Silicon CPU for Peak Compute Performance....")
-time_taken_mm_cpu = @benchmark mul!($C, $A, $B) seconds = 30
+function benchmark_vector_add_cpu(vector_n::Int)
+    x = rand(Float32, vector_n)
+    y = rand(Float32, vector_n)
 
-# Use mean time from the benchmark results to calculate the best time in seconds and milliseconds
-best_time_ns_mm_cpu = mean(time_taken_mm_cpu).time
-best_time_ms_mm_cpu = best_time_ns_mm_cpu / 1e6
-best_time_s_mm_cpu = best_time_ns_mm_cpu / 1e9
-println("Best time for matrix multiplication on Apple Silicon CPU: ", best_time_ms_mm_cpu, " ms")
-print("Estimated compute FLOPS for matrix multiplication on Apple Silicon CPU: ", ((2e-9 * N^3) / best_time_s_mm_cpu), " GFLOPS (More is Better)")
+    y .+= x
+    trial = @benchmark $y .+= $x
+    t = mean_time_stats(trial)
 
-# Use Metal backend to test Apple Silicon based GPU for increased parallelism to achieve peak performance in FLOPS for matrix multiplication
-a = MtlArray(A)
-b = MtlArray(B)
-c = MtlArray(C)
-println("\nBenchmarking matrix multiplication on Apple Silicon GPU for Peak Compute Performance....")
-time_taken_mmc_gpu = @benchmark mul!($c, $a, $b) seconds = 30
-# Use mean time from the benchmark results to calculate the best time in seconds and milliseconds
-best_time_ns_mmc_gpu = mean(time_taken_mmc_gpu).time
-best_time_ms_mmc_gpu = best_time_ns_mmc_gpu / 1e6
-best_time_s_mmc_gpu = best_time_ns_mmc_gpu / 1e9
-println("Best time for matrix multiplication on Apple Silicon GPU: ", best_time_ms_mmc_gpu, " ms")
-print("Estimated compute FLOPS for matrix multiplication on Apple Silicon GPU: ", ((2e-9 * N^3) / best_time_s_mmc_gpu), " GFLOPS (More is Better)")
+    return (
+        bytes=length(y) * sizeof(Float32) * 3,
+        time_ms=t.ms,
+        bandwidth_gbps=bandwidth_gbps(length(y), t.s),
+        trial=trial,
+        x=x,
+        y=y,
+    )
+end
+
+function benchmark_axpy_cpu!(x::Vector{Float32}, y::Vector{Float32}, alpha::Float32)
+    axpy!(alpha, y, x)
+    trial = @benchmark axpy!($alpha, $y, $x)
+    t = mean_time_stats(trial)
+
+    return (
+        bytes=length(y) * sizeof(Float32) * 3,
+        time_ms=t.ms,
+        bandwidth_gbps=bandwidth_gbps(length(y), t.s),
+        trial=trial,
+    )
+end
+
+function benchmark_axpy_gpu!(x::Vector{Float32}, y::Vector{Float32}, alpha::Float32)
+    x_m = MtlArray(x)
+    y_m = MtlArray(y)
+
+    axpy_gpu_sync!(alpha, y_m, x_m)
+    trial = @benchmark axpy_gpu_sync!($alpha, $y_m, $x_m)
+    t = mean_time_stats(trial)
+
+    return (
+        bytes=length(y) * sizeof(Float32) * 3,
+        time_ms=t.ms,
+        bandwidth_gbps=bandwidth_gbps(length(y), t.s),
+        trial=trial,
+    )
+end
+
+function benchmark_matmul_cpu(matmul_n::Int, seconds::Int)
+    A = rand(Float32, matmul_n, matmul_n)
+    B = rand(Float32, matmul_n, matmul_n)
+    C = similar(B)
+
+    mul!(C, A, B)
+    trial = @benchmark mul!($C, $A, $B) seconds = seconds
+    t = mean_time_stats(trial)
+
+    return (
+        time_ms=t.ms,
+        gflops=matmul_gflops(matmul_n, t.s),
+        trial=trial,
+        A=A,
+        B=B,
+        C=C,
+    )
+end
+
+function benchmark_matmul_gpu(A::Matrix{Float32}, B::Matrix{Float32}, C::Matrix{Float32}, seconds::Int)
+    A_m = MtlArray(A)
+    B_m = MtlArray(B)
+    C_m = MtlArray(C)
+
+    matmul_gpu_sync!(C_m, A_m, B_m)
+    trial = @benchmark matmul_gpu_sync!($C_m, $A_m, $B_m) seconds = seconds
+    t = mean_time_stats(trial)
+
+    return (
+        time_ms=t.ms,
+        gflops=matmul_gflops(size(A, 1), t.s),
+        trial=trial,
+    )
+end
+
+function run_benchmarks()
+    vector_n = env_int("VECTOR_N", DEFAULT_VECTOR_N)
+    matmul_n = env_int("MATMUL_N", DEFAULT_MATMUL_N)
+    matmul_seconds = env_int("MATMUL_SECONDS", DEFAULT_MATMUL_SECONDS)
+    plot_dir = env_str("PLOT_DIR", DEFAULT_PLOT_DIR)
+    alpha = DEFAULT_ALPHA
+
+    println("Benchmarking vector addition for Peak Single Core Performance and Memory Bandwidth....")
+    vec_cpu = benchmark_vector_add_cpu(vector_n)
+    println("Length of y: ", vec_cpu.bytes, " bytes")
+    println("Mean time for vector addition: ", vec_cpu.time_ms, " ms")
+    println("Estimated bandwidth: ", vec_cpu.bandwidth_gbps, " GigaBytes/s")
+
+    println("\nBenchmarking BLAS kernel for Peak Multi Core Performance and Memory Bandwidth....")
+    axpy_cpu = benchmark_axpy_cpu!(vec_cpu.x, vec_cpu.y, alpha)
+    println("Length of y: ", axpy_cpu.bytes, " bytes")
+    println("Mean time for BLAS kernel: ", axpy_cpu.time_ms, " ms")
+    println("Estimated bandwidth: ", axpy_cpu.bandwidth_gbps, " GigaBytes/s (More is Better)")
+
+    println("\nBenchmarking vector addition on Apple Silicon GPU for Peak Performance and Memory Bandwidth....")
+    axpy_gpu = benchmark_axpy_gpu!(vec_cpu.x, vec_cpu.y, alpha)
+    println("Length of y: ", axpy_gpu.bytes, " bytes")
+    println("Mean time for vector addition on Apple Silicon GPU: ", axpy_gpu.time_ms, " ms")
+    println("Estimated bandwidth on Apple Silicon GPU: ", axpy_gpu.bandwidth_gbps, " GigaBytes/s (More is Better)")
+
+    println("\nBenchmarking matrix multiplication on Apple Silicon CPU for Peak Compute Performance....")
+    mm_cpu = benchmark_matmul_cpu(matmul_n, matmul_seconds)
+    println("Mean time for matrix multiplication on Apple Silicon CPU: ", mm_cpu.time_ms, " ms")
+    println("Estimated compute FLOPS for matrix multiplication on Apple Silicon CPU: ", mm_cpu.gflops, " GFLOPS (More is Better)")
+
+    println("\nBenchmarking matrix multiplication on Apple Silicon GPU for Peak Compute Performance....")
+    mm_gpu = benchmark_matmul_gpu(mm_cpu.A, mm_cpu.B, mm_cpu.C, matmul_seconds)
+    println("Mean time for matrix multiplication on Apple Silicon GPU: ", mm_gpu.time_ms, " ms")
+    println("Estimated compute FLOPS for matrix multiplication on Apple Silicon GPU: ", mm_gpu.gflops, " GFLOPS (More is Better)")
+
+    save_plots((vec_cpu=vec_cpu, axpy_cpu=axpy_cpu, axpy_gpu=axpy_gpu, mm_cpu=mm_cpu, mm_gpu=mm_gpu), plot_dir)
+    println("\nSaved plots to: ", plot_dir)
+    println(" - ", joinpath(plot_dir, "vector_add_cpu_ms.png"))
+    println(" - ", joinpath(plot_dir, "axpy_cpu_ms.png"))
+    println(" - ", joinpath(plot_dir, "axpy_gpu_ms.png"))
+    println(" - ", joinpath(plot_dir, "matmul_cpu_ms.png"))
+    println(" - ", joinpath(plot_dir, "matmul_gpu_ms.png"))
+end
+
+run_benchmarks()
